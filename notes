@@ -1,0 +1,671 @@
+#!/bin/bash
+
+# Copyright © 2024 Al Newkirk. All rights reserved.
+
+# Variables for notes.
+NOTES_MAIN=${NOTES_MAIN:=main}
+NOTES_BASE=${NOTES_BASE:=$PWD}
+NOTES_ROOT=${NOTES_ROOT:=.notes}
+NOTES_PATH=${NOTES_PATH:=$NOTES_BASE/$NOTES_ROOT}
+NOTES_TYPE=${NOTES_TYPE:=txt}
+NOTES_INIT=${NOTES_INIT:=$PWD/.notes}
+NOTES_VERSION=0.0.1
+
+# Variables for errors.
+NOTES_ERROR_BASE_PATH="Invalid or missing base path"
+NOTES_ERROR_FILE_EXISTS="File already exists"
+NOTES_ERROR_FILE_NAME="Invalid or missing file name"
+NOTES_ERROR_FILE_PATH="Invalid or missing file path"
+NOTES_ERROR_FORM_NAME="Invalid or missing form name"
+NOTES_ERROR_FUNC_NAME="Invalid or missing function name"
+NOTES_ERROR_HOOK_NAME="Invalid or missing hook name"
+NOTES_ERROR_NOTE_PATH="Invalid or missing note path"
+NOTES_ERROR_TYPE_NAME="Invalid or missing type name"
+NOTES_ERROR_ROOT_NAME="Invalid or missing root path name"
+NOTES_ERROR_VIEW_NAME="Invalid or missing view name"
+NOTES_ERROR_SEARCH_TERM="Invalid or missing search term"
+NOTES_ERROR_FILTER_EXPR="Invalid or missing filter expression"
+
+# Function for outputting errors.
+function notes_error() {
+  echo "Error: $@"
+}
+
+# Function for generating a random filename.
+function notes_filename() {
+  echo $(date '+%m-%d-%Y')-$(date '+%s').$NOTES_TYPE
+}
+
+# Find backlinks for the PATH provided.
+function notes_back() {
+  if [ $# -eq 0 ] || [ -z "$1" ]; then
+    notes_error $NOTES_ERROR_FILE_PATH
+    exit 1
+  else
+    DATA=$(basename $1)
+    grep -il "$(notes_link $DATA)" $NOTES_PATH/*.$NOTES_TYPE
+    exit 0
+  fi
+}
+
+# Change the notes base (i.e. the base path).
+function notes_base() {
+  if [ $# -eq 0 ] || [ -z "$1" ]; then
+    notes_error $NOTES_ERROR_BASE_PATH
+    exit 1
+  else
+    BASE=$1
+    if [ -d $NOTES_INIT ]; then
+      HOOK=$NOTES_INIT/hooks/base
+    else
+      HOOK=$NOTES_PATH/hooks/base
+    fi
+    mkdir -p $(dirname $HOOK)
+    echo "NOTES_BASE=$BASE" > $HOOK
+    exit 0
+  fi
+}
+
+# Print the environment variables.
+function notes_conf() {
+  echo "NOTES_BASE=$NOTES_BASE"
+  echo "NOTES_INIT=$NOTES_INIT"
+  echo "NOTES_MAIN=$NOTES_MAIN"
+  echo "NOTES_PATH=$NOTES_PATH"
+  echo "NOTES_ROOT=$NOTES_ROOT"
+  echo "NOTES_TYPE=$NOTES_TYPE"
+  exit 0
+}
+
+# Execute a function handler using the NAME provided.
+function notes_exec() {
+  if [ $# -eq 0 ] || [ -z "$1" ]; then
+    notes_error $NOTES_ERROR_FUNC_NAME
+    exit 1
+  else
+    NAME=$1
+    FILE=$NOTES_PATH/funcs/$NAME
+    if [[ "$FILE" != *.$NOTES_TYPE ]]; then
+      FILE="$FILE.$NOTES_TYPE"
+    fi
+    source $FILE
+    notes_function_handler "$@"
+    exit 0
+  fi
+}
+
+# Open filtered list of files based on the filter EXPR provided.
+function notes_edit() {
+  if [ $# -eq 0 ] || [ -z "$1" ]; then
+    notes_error $NOTES_ERROR_FILTER_EXPR
+    exit 1
+  else
+    EXPR=$1
+    $EDITOR $(notes_list "$EXPR")
+    exit 0
+  fi
+}
+
+# Create a new note and print the filename. Optionally providing a filename.
+function notes_file() {
+  if [ $# -eq 1 ]; then
+    FILE=$NOTES_PATH/$1
+  else
+    FILE=$NOTES_PATH/$(notes_filename)
+  fi
+  if [[ "$FILE" != *.$NOTES_TYPE ]]; then
+    FILE="$FILE.$NOTES_TYPE"
+  fi
+  echo $FILE
+  exit 0
+}
+
+# Find notes matching the terms provided and print the filename(s).
+function notes_find() {
+  if [ $# -eq 0 ] || [ -z "$1" ]; then
+    notes_error $NOTES_ERROR_SEARCH_TERM
+    exit 1
+  else
+    TEMP=$(mktemp)
+    echo $NOTES_PATH/\*.$NOTES_TYPE > $TEMP
+    for EXPR in "$@"; do
+      if [ ! -s $TEMP ]; then
+        break
+      fi
+      case "$EXPR" in
+        +*) grep "${EXPR:1}" $(cat $TEMP) -il > $TEMP ;;
+        -*) grep "${EXPR:1}" $(cat $TEMP) -iL > $TEMP ;;
+        *)  grep "$EXPR" $(cat $TEMP) -il > $TEMP ;;
+      esac
+    done
+    cat $TEMP
+    rm $TEMP
+    exit 0
+  fi
+}
+
+# Create a new note using the FORM provided. Optionally providing a filename.
+function notes_for() {
+  if [ $# -eq 0 ] || [ -z "$1" ]; then
+    notes_error $NOTES_ERROR_FORM_NAME
+    exit 1
+  else
+    FORM=$NOTES_PATH/forms/$1
+    if [[ "$FORM" != *.$NOTES_TYPE ]]; then
+      FORM="$FORM.$NOTES_TYPE"
+    fi
+    if [ -n "$2" ]; then
+      FILE=$NOTES_PATH/$2
+    else
+      FILE=$NOTES_PATH/$(notes_filename)
+    fi
+    if [[ "$FILE" != *.$NOTES_TYPE ]]; then
+      FILE="$FILE.$NOTES_TYPE"
+    fi
+    if [ -f $FILE ]; then
+      notes_error $NOTES_ERROR_FILE_EXISTS $FILE
+      exit 1
+    fi
+    cp $FORM $FILE
+    $EDITOR "$FILE"
+    exit 0
+  fi
+}
+
+# Create a note form (i.e. template) using the NAME provided.
+function notes_form() {
+  if [ $# -eq 0 ] || [ -z "$1" ]; then
+    notes_error $NOTES_ERROR_FORM_NAME
+    exit 1
+  else
+    NAME=$1
+    FILE=$NOTES_PATH/forms/$NAME
+    if [[ "$FILE" != *.$NOTES_TYPE ]]; then
+      FILE="$FILE.$NOTES_TYPE"
+    fi
+    mkdir -p $(dirname $FILE)
+    $EDITOR "$FILE"
+    exit 0
+  fi
+}
+
+# Create a function handler using the NAME provided.
+function notes_func() {
+  if [ $# -eq 0 ] || [ -z "$1" ]; then
+    notes_error $NOTES_ERROR_FUNC_NAME
+    exit 1
+  else
+    NAME=$1
+    FILE=$NOTES_PATH/funcs/$NAME
+    if [[ "$FILE" != *.$NOTES_TYPE ]]; then
+      FILE="$FILE.$NOTES_TYPE"
+    fi
+    mkdir -p $(dirname $FILE)
+    if [ ! -s $FILE ]; then
+      echo -e "function notes_function_handler() {}" > $FILE
+    fi
+    $EDITOR "$FILE"
+    exit 0
+  fi
+}
+
+# Find notes matching the terms provided and print matches using grep.
+function notes_grep() {
+  if [ $# -eq 0 ] || [ -z "$1" ]; then
+    notes_error $NOTES_ERROR_SEARCH_TERM
+    exit 1
+  else
+    TEMP=$(mktemp)
+    echo $NOTES_PATH/\*.$NOTES_TYPE > $TEMP
+    TERMS=()
+    for EXPR in "$@"; do
+      if [ ! -s $TEMP ]; then
+        break
+      fi
+      case "$EXPR" in
+        +*) TERMS+=("${EXPR:1}"); grep "${EXPR:1}" $(cat $TEMP) -il > $TEMP ;;
+        -*) grep "${EXPR:1}" $(cat $TEMP) -iL > $TEMP ;;
+        *)  TERMS+=("${EXPR}"); grep "$EXPR" $(cat $TEMP) -il > $TEMP ;;
+      esac
+    done
+    local EXPR=$(IFS='|'; echo "${TERMS[*]}")
+    local FILES="$(echo $(cat $TEMP))"
+    if [ -z "$EXPR" ]; then
+      EXPR="\*"
+    fi
+    if [ ! -s $TEMP ]; then
+      rm $TEMP
+      exit 1
+    else
+      rm $TEMP
+      grep -inHE "$EXPR" $FILES
+      exit 0
+    fi
+  fi
+}
+
+# Create a runtime hook using the NAME provided.
+function notes_hook() {
+  if [ $# -eq 0 ] || [ -z "$1" ]; then
+    notes_error $NOTES_ERROR_HOOK_NAME
+    exit 1
+  else
+    NAME=$1
+    if [ -d $NOTES_INIT ]; then
+      HOOK=$NOTES_INIT/hooks/$NAME
+    else
+      HOOK=$NOTES_PATH/hooks/$NAME
+    fi
+    mkdir -p $(dirname $HOOK)
+    $EDITOR "$HOOK"
+    exit 0
+  fi
+}
+
+# Initialize the notes repository.
+function notes_init() {
+  mkdir -p $PWD/$NOTES_ROOT
+  exit 0
+}
+
+# Print relative file path for the FILE provided.
+function notes_link() {
+  if [ $# -eq 0 ] || [ -z "$1" ]; then
+    notes_error $NOTES_ERROR_FILE_PATH
+    exit 1
+  else
+    PATH=$1
+    if [[ "$PATH" == "$NOTES_BASE"* ]]; then
+      echo "${PATH#$NOTES_BASE/}"
+    else
+      echo $PATH
+    fi
+    exit 0
+  fi
+}
+
+# List all notes and forms (i.e. templates). Optionally providing a filter EXPR.
+function notes_list() {
+  if [ $# -eq 1 ]; then
+    find $NOTES_PATH -type f -name \*"$1"\*.$NOTES_TYPE
+  else
+    find $NOTES_PATH -type f -name \*.$NOTES_TYPE
+  fi
+  exit 0
+}
+
+# Edit your default note.
+function notes_main() {
+  $EDITOR $(notes_file "$NOTES_MAIN")
+  exit 0
+}
+
+# Create a new note and launch the EDITOR. Optionally providing a filename.
+function notes_new() {
+  if [ $# -eq 1 ]; then
+    FILE=$(notes_file "$1")
+  else
+    FILE=$(notes_file)
+  fi
+  $EDITOR "$FILE"
+  exit 0
+}
+
+# Find notes matching the terms provided and open the file(s) in the EDITOR.
+function notes_open() {
+  $EDITOR $(notes_find "$@")
+  exit 0
+}
+
+# Change the notes path for notes.
+function notes_path() {
+  if [ $# -eq 0 ] || [ -z "$1" ]; then
+    notes_error $NOTES_ERROR_NOTE_PATH
+    exit 1
+  else
+    DATA=$1
+    if [ -d $NOTES_INIT ]; then
+      HOOK=$NOTES_INIT/hooks/path
+    else
+      HOOK=$NOTES_PATH/hooks/path
+    fi
+    mkdir -p $(dirname $HOOK)
+    echo "NOTES_PATH=$DATA" > $HOOK
+    exit 0
+  fi
+}
+
+# Open a single random note. Optionally providing a filter EXPR.
+function notes_rand() {
+  if [ $# -eq 1 ]; then
+    $EDITOR $(find $NOTES_PATH -maxdepth 1 -type f -name \*.$NOTES_TYPE | grep "$1" | sort -R | head -n 1)
+  else
+    $EDITOR $(find $NOTES_PATH -maxdepth 1 -type f -name \*.$NOTES_TYPE | sort -R | head -n 1)
+  fi
+  exit 0
+}
+
+# Change the notes root path name (i.e. under the base).
+function notes_root() {
+  if [ $# -eq 0 ] || [ -z "$1" ]; then
+    notes_error $NOTES_ERROR_ROOT_NAME
+    exit 1
+  else
+    ROOT=$1
+    if [ -d $NOTES_INIT ]; then
+      HOOK=$NOTES_INIT/hooks/root
+    else
+      HOOK=$NOTES_PATH/hooks/root
+    fi
+    mkdir -p $(dirname $HOOK)
+    echo "NOTES_ROOT=$ROOT" > $HOOK
+    exit 0
+  fi
+}
+
+# Find notes matching the terms provided and print the results and filename(s).
+function notes_search() {
+  if [ $# -eq 0 ] || [ -z "$1" ]; then
+    notes_error $NOTES_ERROR_SEARCH_TERM
+    exit 1
+  else
+    for FILE in $(notes_find $@); do
+      echo $FILE
+      local IFS="|"
+      EXPR="$*"
+      grep -iE "$EXPR" $FILE
+      echo
+    done
+  fi
+  exit 0
+}
+
+# Change the notes type (i.e. the file suffix).
+function notes_type() {
+  if [ $# -eq 0 ] || [ -z "$1" ]; then
+    notes_error $NOTES_ERROR_TYPE_NAME
+    exit 1
+  else
+    TYPE=$1
+    if [ -d $NOTES_INIT ]; then
+      HOOK=$NOTES_INIT/hooks/type
+    else
+      HOOK=$NOTES_PATH/hooks/type
+    fi
+    mkdir -p $(dirname $HOOK)
+    echo "NOTES_TYPE=$TYPE" > $HOOK
+    exit 0
+  fi
+}
+
+# Create and execute saved searches using the NAME provided.
+function notes_view() {
+  if [ $# -eq 0 ] || [ -z "$1" ]; then
+    notes_error $NOTES_ERROR_VIEW_NAME
+    exit 1
+  fi
+  if [ $# -gt 1 ]; then
+    NAME=$1
+    VIEW=$NOTES_PATH/views/$NAME
+    if [[ "$VIEW" != *.$NOTES_TYPE ]]; then
+      VIEW="$VIEW.$NOTES_TYPE"
+    fi
+    mkdir -p $(dirname $VIEW)
+    shift
+    >$VIEW
+    for EXPR in "$@"; do
+      echo "$EXPR" >> $VIEW
+    done
+    exit 0
+  else
+    NAME=$1
+    VIEW=$NOTES_PATH/views/$NAME
+    if [[ "$VIEW" != *.$NOTES_TYPE ]]; then
+      VIEW="$VIEW.$NOTES_TYPE"
+    fi
+    if [ -f $VIEW ]; then
+      local args=()
+      while IFS= read -r line || [[ -n "$line" ]]; do
+        args+=("$line")
+      done < "$VIEW"
+      notes_open "${args[@]}"
+    fi
+    exit 0
+  fi
+}
+
+# Find backlinks for the PATH provided and open the file(s) in the EDITOR.
+function notes_with() {
+  if [ $# -eq 0 ] || [ -z "$1" ]; then
+    notes_error $NOTES_ERROR_FILE_PATH
+    exit 1
+  else
+    DATA=$1
+    $EDITOR $(notes_back $DATA)
+    exit 0
+  fi
+}
+
+# Print help message
+function notes_help() {
+  PROG=$(basename $0)
+  cat << EOF
+Usage: $PROG [COMMAND] [ARGS...]
+
+Manage notes with ease from the command-line using your \$EDITOR. Use the
+"help" command to display this message.
+
+Commands:
+  base PATH                    Change the notes base, i.e. the base path.
+                               Example:
+                                 $PROG base /path/to/notes
+
+  back PATH                    Find backlinks for the PATH provided.
+                               Example:
+                                 $PROG back /path/to/notes/file.txt
+
+  conf                         Print the environment variables.
+                               Example:
+                                 $PROG conf
+
+  edit EXPR                    Open filtered list of files based on the filter EXPR provided.
+                               Examples:
+                                 $PROG edit main
+                                 $PROG edit release
+
+  file [NAME]                  Create a new note and print the filename. Optionally providing a filename.
+                               Examples:
+                                 $PROG file
+                                 $PROG file todo
+
+  find TERM [TERM, ...]        Find notes matching the terms provided and print the filename(s).
+                               Examples:
+                                 $PROG find release
+                                 $PROG find release 0.0.1
+
+  for FORM [NAME]              Create a new note using the FORM provided. Optionally providing a filename.
+                               Examples:
+                                 $PROG for release
+                                 $PROG for release release-0.0.1
+
+  form NAME                    Create a note form, i.e. template, using the NAME provided.
+                               Example:
+                                 $PROG form release
+
+  grep TERM [TERM, ...]        Find notes matching the terms provided and print matches using grep.
+                               Examples:
+                                 $PROG grep release
+                                 $PROG grep release 0.0.1
+
+  hook NAME                    Create a runtime hook using the NAME provided.
+                               Example:
+                                 $PROG hook vars
+
+  init                         Initialize the notes repository.
+                               Example:
+                                 $PROG init
+
+  link PATH                    Print relative file path for the FILE provided.
+                               Example:
+                                 $PROG link /path/to/notes/file.txt
+
+  list [EXPR]                  List all notes and forms (i.e. templates). Optionally providing a filter EXPR.
+                               Examples:
+                                 $PROG list
+                                 $PROG list release
+
+  main                         Edit your default note.
+                               Example:
+                                 $PROG main
+
+  new [NAME]                   Create a new note and launch the EDITOR. Optionally providing a filename.
+                               Examples:
+                                 $PROG new
+                                 $PROG new todo
+
+  open TERM [TERM, ...]        Find notes matching the terms provided and open the file(s) in the EDITOR.
+                               Examples:
+                                 $PROG open release
+                                 $PROG open release 0.0.1
+
+  path PATH                    Change the notes path for notes.
+                               Example:
+                                 $PROG path /path/to/notes/.notes
+
+  rand [EXPR]                  Open a single random note. Optionally providing a filter EXPR.
+                               Examples:
+                                 $PROG rand
+                                 $PROG rand release
+
+  root NAME                    Change the notes root path name (i.e. under the base).
+                               Example:
+                                 $PROG root .notes
+
+  search TERM [TERM, ...]      Find notes matching the terms provided and print the results and filename(s).
+                               Examples:
+                                 $PROG search release
+                                 $PROG search release 0.0.1
+
+  type NAME                    Change the notes type, i.e. the file suffix.
+                               Examples:
+                                 $PROG type txt
+                                 $PROG type md
+
+  view NAME [TERM, ...]        Create and execute saved searches using the NAME provided.
+                               Examples:
+                                 $PROG view releases
+                                 $PROG view releases release 0.0.1
+
+  with PATH                    Find backlinks for the PATH provided and open the file(s) in the EDITOR.
+                               Example:
+                                 $PROG with /path/to/notes/file.txt
+
+This is "$PROG" version $NOTES_VERSION. Copyright 2024. All rights reserved.
+EOF
+  exit 1
+}
+
+# Discover the notes repository.
+if [ ! -d $NOTES_PATH ] && [ -d $HOME/$NOTES_ROOT ]; then
+  export NOTES_BASE=$HOME
+  export NOTES_PATH=$NOTES_BASE/$NOTES_ROOT
+fi
+
+if [ ! -d $NOTES_PATH ]; then
+  notes_init
+fi
+
+# Source registered hooks
+if [ -d $NOTES_INIT/hooks ]; then
+  for hook in $(find $NOTES_INIT/hooks -type f | sort); do
+    source $hook
+  done
+  export NOTES_PATH=$NOTES_BASE/$NOTES_ROOT
+elif [ -d $NOTES_PATH/hooks ]; then
+  for hook in $(find $NOTES_PATH/hooks -type f | sort); do
+    source $hook
+  done
+  export NOTES_PATH=$NOTES_BASE/$NOTES_ROOT
+fi
+
+# Main script logic
+if [ $# -eq 0 ]; then
+    notes_help
+elif [ "$1" == "back" ]; then
+    shift
+    notes_back "$@"
+elif [ "$1" == "base" ]; then
+    shift
+    notes_base "$@"
+elif [ "$1" == "conf" ]; then
+    shift
+    notes_conf "$@"
+elif [ "$1" == "exec" ]; then
+    shift
+    notes_exec "$@"
+elif [ "$1" == "edit" ]; then
+    shift
+    notes_edit "$@"
+elif [ "$1" == "file" ]; then
+    shift
+    notes_file "$@"
+elif [ "$1" == "find" ]; then
+    shift
+    notes_find "$@"
+elif [ "$1" == "for" ]; then
+    shift
+    notes_for "$@"
+elif [ "$1" == "form" ]; then
+    shift
+    notes_form "$@"
+elif [ "$1" == "func" ]; then
+    shift
+    notes_func "$@"
+elif [ "$1" == "grep" ]; then
+    shift
+    notes_grep "$@"
+elif [ "$1" == "hook" ]; then
+    shift
+    notes_hook "$@"
+elif [ "$1" == "init" ]; then
+    shift
+    notes_init "$@"
+elif [ "$1" == "link" ]; then
+    shift
+    notes_link "$@"
+elif [ "$1" == "list" ]; then
+    shift
+    notes_list "$@"
+elif [ "$1" == "main" ]; then
+    shift
+    notes_main "$@"
+elif [ "$1" == "new" ]; then
+    shift
+    notes_new "$@"
+elif [ "$1" == "open" ]; then
+    shift
+    notes_open "$@"
+elif [ "$1" == "path" ]; then
+    shift
+    notes_path "$@"
+elif [ "$1" == "rand" ]; then
+    shift
+    notes_rand "$@"
+elif [ "$1" == "root" ]; then
+    shift
+    notes_root "$@"
+elif [ "$1" == "search" ]; then
+    shift
+    notes_search "$@"
+elif [ "$1" == "type" ]; then
+    shift
+    notes_type "$@"
+elif [ "$1" == "view" ]; then
+    shift
+    notes_view "$@"
+elif [ "$1" == "with" ]; then
+    shift
+    notes_with "$@"
+else
+    notes_help
+fi
